@@ -35,16 +35,16 @@ docker run -p 9000:9000 -p 9001:9001 \
 
 ### Binary Installation
 
-Download the binary for your platform from the [latest release](https://github.com/golithus/minio-builds/releases/latest):
+Download the binary for your platform from the [latest release](https://github.com/MaximKiselev/minio-builds/releases/latest):
 
 ```bash
 # Linux AMD64
-wget https://github.com/golithus/minio-builds/releases/latest/download/minio-linux-amd64
+wget https://github.com/MaximKiselev/minio-builds/releases/latest/download/minio-linux-amd64
 chmod +x minio-linux-amd64
 sudo mv minio-linux-amd64 /usr/local/bin/minio
 
 # Linux ARM64
-wget https://github.com/golithus/minio-builds/releases/latest/download/minio-linux-arm64
+wget https://github.com/MaximKiselev/minio-builds/releases/latest/download/minio-linux-arm64
 chmod +x minio-linux-arm64
 sudo mv minio-linux-arm64 /usr/local/bin/minio
 
@@ -65,10 +65,10 @@ Multi-architecture Docker images are published to GitHub Container Registry:
 
 ```bash
 # Latest release
-ghcr.io/golithus/minio:latest
+ghcr.io/MaximKiselev/minio:latest
 
 # Specific version
-ghcr.io/golithus/minio:RELEASE.2025-01-15T12-00-00Z
+ghcr.io/MaximKiselev/minio:RELEASE.2025-01-15T12-00-00Z
 ```
 
 **Supported Architectures:**
@@ -82,6 +82,7 @@ Docker automatically selects the correct architecture for your system.
 Each release includes:
 - `minio-linux-amd64` - Linux x86_64 binary
 - `minio-linux-arm64` - Linux ARM64 binary
+- `minio-windows-arm64` - windows x86_64 binary
 - `*.sha256sum` - SHA256 checksums for verification
 
 ## Disclaimer

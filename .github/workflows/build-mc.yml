@@ -72,6 +72,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     needs: [get-version, check-release]
     if: needs.check-release.outputs.exists == 'false'
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -88,25 +91,24 @@ jobs:
             docker: true
             binary_name: mc
             artifact_name: mc-linux-arm64
-          - os: macos
+          - os: darwin
             arch: amd64
-            runner: macos-15-intel
+            runner: macos-13
             docker: false
             binary_name: mc
             artifact_name: mc-darwin-amd64
-          - os: macos
+          - os: darwin
             arch: arm64
-            runner: macos-latest
+            runner: macos-14
             docker: false
             binary_name: mc
             artifact_name: mc-darwin-arm64
           - os: windows
             arch: amd64
-            runner: windows-2022
+            runner: windows-latest
             docker: false
             binary_name: mc.exe
             artifact_name: mc-windows-amd64.exe
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -143,10 +145,15 @@ jobs:
           OUTPUT_BINARY: ../${{ matrix.binary_name }}
         run: |
           LDFLAGS=$(MC_RELEASE=RELEASE go run buildscripts/gen-ldflags.go)
-          if [ "$TARGET_OS" = "windows" ]; then
-            go build -trimpath --ldflags "$LDFLAGS" -o "$OUTPUT_BINARY"
-          else
-            go build -tags kqueue -trimpath --ldflags "$LDFLAGS" -o "$OUTPUT_BINARY"
+          
+          BUILD_TAGS=""
+          if [ "$TARGET_OS" = "darwin" ] || [ "$TARGET_OS" = "linux" ]; then
+            BUILD_TAGS="-tags kqueue"
+          fi
+          
+          go build $BUILD_TAGS -trimpath --ldflags "$LDFLAGS" -o "$OUTPUT_BINARY"
+
+          if [ "$TARGET_OS" != "windows" ]; then
             chmod +x "$OUTPUT_BINARY"
           fi
 

@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  minio:
+    image: ghcr.io/maximkiselev/minio:latest
+    container_name: minio
+    command: server /data --address :9000
+    ports:
+      - "9000:9000"   # S3 API
+      #- "9001:9001"   # Built-in Console (optional, can be disabled if using external console)
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      # Optional: Configure for external console
+      # MINIO_BROWSER: "off"
+    volumes:
+      - minio_data:/data
+    networks:
+      - minio_network
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  console:
+    image: ghcr.io/georgmangold/console:latest
+    container_name: minio-console
+    ports:
+      - "9001:9090"
+    environment:
+      CONSOLE_MINIO_SERVER: http://minio:9000
+      CONSOLE_PBKDF_PASSPHRASE: ${CONSOLE_PBKDF_PASSPHRASE:-changeme123}
+      CONSOLE_PBKDF_SALT: ${CONSOLE_PBKDF_SALT:-changeme456}
+      # Optional: Secure cookie settings
+      # CONSOLE_SECURE_TLS_REDIRECT: "false"
+    networks:
+      - minio_network
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  minio_data:
+    driver: local
+
+networks:
+  minio_network:
+    driver: bridge

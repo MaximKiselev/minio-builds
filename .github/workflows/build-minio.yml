@@ -1,11 +1,8 @@
 name: Build MinIO Binaries
 
 on:
-  # Run nightly at 2 AM UTC
   schedule:
     - cron: '0 2 * * *'
-
-  # Allow manual trigger with optional version override
   workflow_dispatch:
     inputs:
       minio_version:
@@ -24,6 +21,7 @@ jobs:
     outputs:
       version: ${{ steps.get-version.outputs.version }}
       version_short: ${{ steps.get-version.outputs.version_short }}
+      repo_owner_lowercase: ${{ steps.get-version.outputs.repo_owner_lowercase }}
     steps:
       - name: Get latest MinIO release
         id: get-version
@@ -36,11 +34,12 @@ jobs:
             echo "Latest MinIO version: $VERSION"
           fi
 
-          # Remove 'RELEASE.' prefix for shorter version
           VERSION_SHORT="${VERSION#RELEASE.}"
+          REPO_OWNER_LOWERCASE=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
 
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "version_short=$VERSION_SHORT" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_short=$VERSION_SHORT" >> "$GITHUB_OUTPUT"
+          echo "repo_owner_lowercase=$REPO_OWNER_LOWERCASE" >> "$GITHUB_OUTPUT"
 
   check-release:
     name: Check if Release Exists
@@ -52,20 +51,18 @@ jobs:
       - name: Check if release exists
         id: check
         run: |
-          # For manual builds, always return false to allow rebuild
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "exists=false" >> $GITHUB_OUTPUT
             echo "Manual build - skipping release check"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # For scheduled builds, check if release exists
           if gh release view "${{ needs.get-version.outputs.version }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
             echo "Release ${{ needs.get-version.outputs.version }} already exists"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
             echo "Release ${{ needs.get-version.outputs.version }} does not exist"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,16 +72,31 @@ jobs:
     runs-on: ${{ matrix.runner }}
     needs: [get-version, check-release]
     if: needs.check-release.outputs.exists == 'false'
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: linux
             arch: amd64
-            runner: ubuntu-24.04-8core
+            runner: ubuntu-24.04
+            docker: true
+            binary_name: minio
+            artifact_name: minio-linux-amd64
           - os: linux
             arch: arm64
-            runner: ubuntu-24.04-4core-arm64
+            runner: ubuntu-24.04-arm
+            docker: true
+            binary_name: minio
+            artifact_name: minio-linux-arm64
+          - os: windows
+            arch: amd64
+            runner: windows-latest
+            docker: false
+            binary_name: minio.exe
+            artifact_name: minio-windows-amd64.exe
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -106,9 +118,9 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: go-${{ matrix.arch }}-${{ hashFiles('minio-src/go.sum') }}
+          key: minio-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('minio-src/go.sum') }}
           restore-keys: |
-            go-${{ matrix.arch }}-
+            minio-${{ matrix.os }}-${{ matrix.arch }}-
 
       - name: Build MinIO binary
         working-directory: minio-src
@@ -117,17 +129,24 @@ jobs:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
           GO111MODULE: on
+          TARGET_OS: ${{ matrix.os }}
+          OUTPUT_BINARY: ../${{ matrix.binary_name }}
         run: |
-          # Generate LDFLAGS using MinIO's script
           LDFLAGS=$(go run buildscripts/gen-ldflags.go)
+          
+          BUILD_TAGS=""
+          if [ "$TARGET_OS" = "linux" ]; then
+            BUILD_TAGS="-tags kqueue"
+          fi
+          
+          go build $BUILD_TAGS -trimpath --ldflags "$LDFLAGS" -o "$OUTPUT_BINARY"
 
-          # Build binary with MinIO's exact build process
-          go build -tags kqueue -trimpath --ldflags "$LDFLAGS" -o ../minio
-
-          # Make binary executable
-          chmod +x ../minio
+          if [ "$TARGET_OS" != "windows" ]; then
+            chmod +x "$OUTPUT_BINARY"
+          fi
 
       - name: Log in to GitHub Container Registry
+        if: matrix.docker
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -135,9 +154,11 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
+        if: matrix.docker
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push Docker image
+        if: matrix.docker
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -145,7 +166,7 @@ jobs:
           platforms: ${{ matrix.os }}/${{ matrix.arch }}
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/minio:${{ needs.get-version.outputs.version }}-${{ matrix.arch }}
+            ghcr.io/${{ needs.get-version.outputs.repo_owner_lowercase }}/minio:${{ needs.get-version.outputs.version }}-${{ matrix.arch }}
           labels: |
             org.opencontainers.image.title=MinIO
             org.opencontainers.image.description=High Performance Object Storage
@@ -155,25 +176,29 @@ jobs:
 
       - name: Rename binary with platform suffix
         run: |
-          mv minio minio-${{ matrix.os }}-${{ matrix.arch }}
+          mv "${{ matrix.binary_name }}" "${{ matrix.artifact_name }}"
 
       - name: Generate checksum
         run: |
-          sha256sum minio-${{ matrix.os }}-${{ matrix.arch }} > minio-${{ matrix.os }}-${{ matrix.arch }}.sha256sum
+          sha256sum "${{ matrix.artifact_name }}" > "${{ matrix.artifact_name }}.sha256sum"
+          
+          echo "Checksum generated:"
+          cat "${{ matrix.artifact_name }}.sha256sum"
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: minio-${{ matrix.os }}-${{ matrix.arch }}
+          name: ${{ matrix.artifact_name }}
           path: |
-            minio-${{ matrix.os }}-${{ matrix.arch }}
-            minio-${{ matrix.os }}-${{ matrix.arch }}.sha256sum
+            ${{ matrix.artifact_name }}
+            ${{ matrix.artifact_name }}.sha256sum
           retention-days: 7
 
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [get-version, build]
+    needs: [get-version, check-release, build]
+    if: needs.check-release.outputs.exists == 'false'
     steps:
       - name: Download binary artifacts
         uses: actions/download-artifact@v4
@@ -207,15 +232,16 @@ jobs:
 
             - `minio-linux-amd64` - Linux x86_64
             - `minio-linux-arm64` - Linux ARM64
+            - `minio-windows-amd64.exe` - Windows x86_64
 
             ## Docker Images
 
             Multi-arch Docker images are available on GitHub Container Registry:
 
             ```bash
-            docker pull ghcr.io/${{ github.repository_owner }}/minio:${{ needs.get-version.outputs.version }}
+            docker pull ghcr.io/${{ needs.get-version.outputs.repo_owner_lowercase }}/minio:${{ needs.get-version.outputs.version }}
             # or
-            docker pull ghcr.io/${{ github.repository_owner }}/minio:latest
+            docker pull ghcr.io/${{ needs.get-version.outputs.repo_owner_lowercase }}/minio:latest
             ```
 
             Run MinIO with Docker:
@@ -223,12 +249,12 @@ jobs:
             ```bash
             docker run -p 9000:9000 -p 9001:9001 \
               -v /path/to/data:/data \
-              ghcr.io/${{ github.repository_owner }}/minio:latest
+              ghcr.io/${{ needs.get-version.outputs.repo_owner_lowercase }}/minio:latest
             ```
 
             ## Binary Installation
 
-            Download the binary for your platform:
+            ### Linux
 
             ```bash
             # Linux AMD64
@@ -241,16 +267,33 @@ jobs:
             sha256sum -c minio-linux-amd64.sha256sum
             ```
 
+            ### Windows
+
+            ```powershell
+            # Download
+            Invoke-WebRequest -Uri "https://github.com/${{ github.repository }}/releases/download/${{ needs.get-version.outputs.version }}/minio-windows-amd64.exe" -OutFile "minio.exe"
+
+            # Verify checksum
+            Invoke-WebRequest -Uri "https://github.com/${{ github.repository }}/releases/download/${{ needs.get-version.outputs.version }}/minio-windows-amd64.exe.sha256sum" -OutFile "minio.exe.sha256sum"
+            $expected = (Get-Content minio.exe.sha256sum).Split(" ")[0]
+            $actual = (Get-FileHash minio.exe -Algorithm SHA256).Hash.ToLower()
+            if ($expected -eq $actual) { Write-Host "Checksum OK" } else { Write-Host "Checksum FAILED" }
+            ```
+
             ## Usage
 
             ```bash
+            # Linux
             minio server /data
+
+            # Windows
+            minio.exe server C:\data
             ```
 
             ## Notes
 
             - These binaries are built from the official MinIO source code using their build process
-            - Built with Go ${{ steps.go-version.outputs.version || '1.24.x' }}
+            - Built with Go 1.24.x (via `actions/setup-go`)
             - Static binaries with CGO disabled for maximum portability
             - See the [MinIO Documentation](https://docs.min.io) for more information
 
@@ -267,7 +310,8 @@ jobs:
   docker-manifest:
     name: Create Multi-arch Docker Manifest
     runs-on: ubuntu-latest
-    needs: [get-version, build]
+    needs: [get-version, check-release, build]
+    if: needs.check-release.outputs.exists == 'false'
     steps:
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -278,16 +322,17 @@ jobs:
 
       - name: Create and push multi-arch manifest
         run: |
-          # Create manifest list combining both architectures
-          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/minio:${{ needs.get-version.outputs.version }} \
-            ghcr.io/${{ github.repository_owner }}/minio:${{ needs.get-version.outputs.version }}-amd64 \
-            ghcr.io/${{ github.repository_owner }}/minio:${{ needs.get-version.outputs.version }}-arm64
+          REPO_OWNER="${{ needs.get-version.outputs.repo_owner_lowercase }}"
+          VERSION="${{ needs.get-version.outputs.version }}"
+          
+          docker buildx imagetools create -t "ghcr.io/${REPO_OWNER}/minio:${VERSION}" \
+            "ghcr.io/${REPO_OWNER}/minio:${VERSION}-amd64" \
+            "ghcr.io/${REPO_OWNER}/minio:${VERSION}-arm64"
 
-          # Also tag as latest
-          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/minio:latest \
-            ghcr.io/${{ github.repository_owner }}/minio:${{ needs.get-version.outputs.version }}-amd64 \
-            ghcr.io/${{ github.repository_owner }}/minio:${{ needs.get-version.outputs.version }}-arm64
+          docker buildx imagetools create -t "ghcr.io/${REPO_OWNER}/minio:latest" \
+            "ghcr.io/${REPO_OWNER}/minio:${VERSION}-amd64" \
+            "ghcr.io/${REPO_OWNER}/minio:${VERSION}-arm64"
 
           echo "Multi-arch manifest created and pushed:"
-          echo "- ghcr.io/${{ github.repository_owner }}/minio:${{ needs.get-version.outputs.version }}"
-          echo "- ghcr.io/${{ github.repository_owner }}/minio:latest"
+          echo "- ghcr.io/${REPO_OWNER}/minio:${VERSION}"
+          echo "- ghcr.io/${REPO_OWNER}/minio:latest"

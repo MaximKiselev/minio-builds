@@ -293,7 +293,7 @@ jobs:
             ## Notes
 
             - These binaries are built from the official MinIO source code using their build process
-            - Built with Go 1.24.x (via `actions/setup-go`)
+            - Built with Go 1.25.x (via `actions/setup-go`)
             - Static binaries with CGO disabled for maximum portability
             - See the [MinIO Documentation](https://docs.min.io) for more information
 

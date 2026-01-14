@@ -221,8 +221,6 @@ jobs:
             # MinIO Community Edition - Binary Build
             
             > **Automated nightly builds of MinIO Community Edition binaries and Docker images**
-            >
-            > Provided as a public service by [Lithus](https://lithus.eu/)
 
             **Version:** `${{ needs.get-version.outputs.version }}`
             **Build Date:** ${{ github.event.repository.updated_at }}

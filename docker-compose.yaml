@@ -6,19 +6,16 @@ services:
     container_name: minio
     command: server /data --address :9000
     ports:
-      - "9000:9000"   # S3 API
-      #- "9001:9001"   # Built-in Console (optional, can be disabled if using external console)
+      - "9000:9000"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      # Optional: Configure for external console
-      # MINIO_BROWSER: "off"
     volumes:
       - minio_data:/data
     networks:
       - minio_network
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -34,13 +31,51 @@ services:
       CONSOLE_MINIO_SERVER: http://minio:9000
       CONSOLE_PBKDF_PASSPHRASE: ${CONSOLE_PBKDF_PASSPHRASE:-changeme123}
       CONSOLE_PBKDF_SALT: ${CONSOLE_PBKDF_SALT:-changeme456}
-      # Optional: Secure cookie settings
-      # CONSOLE_SECURE_TLS_REDIRECT: "false"
     networks:
       - minio_network
     depends_on:
       minio:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Init container - runs once and exits
+  mc-init:
+    image: ghcr.io/maximkiselev/mc:latest
+    container_name: minio-mc-init
+    entrypoint: /bin/sh
+    command: >
+      -c "
+        mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
+        mc mb --ignore-existing myminio/uploads;
+        mc mb --ignore-existing myminio/backups;
+        echo 'Init completed';
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    networks:
+      - minio_network
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+
+  # Persistent mc for ad-hoc commands
+  mc:
+    image: ghcr.io/maximkiselev/mc:latest
+    container_name: minio-mc
+    entrypoint: /bin/sh
+    command: -c "mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} && tail -f /dev/null"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    networks:
+      - minio_network
+    depends_on:
+      minio:
+        condition: service_healthy
+    profiles:
+      - tools  # Only starts with: docker-compose --profile tools up
     restart: unless-stopped
 
 volumes:
